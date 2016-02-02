@@ -1,0 +1,34 @@
+#!/bin/bash
+#
+# vmlogrdr hotplug policy agent for Linux 2.4 kernels
+#
+# Kernel vmlogrdr hotplug params include:
+#
+#	ACTION= %s  [add or remove]
+#	MAJOR= %d   [dynamic major number]
+#	MINOR= %d   [dynamic minor number]
+#	SERVICE= %s [currently: LOGREC only]
+#
+#
+
+cd /etc/hotplug
+. hotplug.functions
+
+DEVDIR="/dev"
+NAME="$DEVDIR/vmlogrdr_$SERVICE"
+case "$ACTION" in
+      add)
+            mesg "Creating devicenode $NAME"
+            rm -f "$NAME"                          || exit 1
+            mknod -m 440 "$NAME" c $MAJOR $MINOR   || exit 1
+                ;;
+      remove)
+            mesg "Removing devicenode $NAME"
+            rm -f "$NAME"                          || exit 1
+            ;;
+      *)
+            mesg "$(basename $0): $ACTION event not supported"
+                exit 1
+            ;;
+esac
+exit 0
