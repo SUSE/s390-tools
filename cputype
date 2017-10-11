@@ -2,7 +2,7 @@
 #
 # cputype
 #
-# Copyright (c) 2014 SUSE LINUX Products GmbH, Nuernberg, Germany.
+# Copyright (c) 2014-2017 SUSE LINUX GmbH, Nuernberg, Germany.
 #
 # Based on the IBM machine model, returns a (hopefully) human understandable
 # string that identifies the processor.
