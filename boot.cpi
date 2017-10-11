@@ -35,7 +35,7 @@ case "$1" in
     		echo "$CPI_SYSPLEX_NAME" >/sys/firmware/cpi/sysplex_name
     		echo "LINUX   " >/sys/firmware/cpi/system_type
     		awk "BEGIN { split(\"`uname -r`\",x,\".\"); printf(\"0x0000000000%02x%02x%02x\", x[1],x[2],x[3]) }" >/sys/firmware/cpi/system_level
-    		echo 1 >/sys/firmware/cpi/set
+    		echo 1 >/sys/firmware/cpi/set 2>/dev/null
 	    	rc_status -v -r
 	else
 		rc_status -u
