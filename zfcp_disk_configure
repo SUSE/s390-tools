@@ -255,7 +255,7 @@ else
     /sbin/udevadm settle
 
     # check multipathing
-    _zfcp_scsi_dev=$(multipathd -k'show paths' 2> /dev/null | sed -n "s/$_zfcp_target_id \(sd[a-z]*\).*/\1/p")
+    _zfcp_scsi_dev=$(multipathd -k'show paths' 2> /dev/null | sed -n "s/$_zfcp_scsi_id \(sd[a-z]*\).*/\1/p")
     [ "$_zfcp_scsi_dev" ] && multipathd -k"del path $_zfcp_scsi_dev"
 
     # Deconfigure the FCP_LUN

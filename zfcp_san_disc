@@ -64,6 +64,32 @@ list_lun()
 
 }
 
+deactivate()
+{
+    local ccw=$1
+
+    echo 0 > /sys/bus/ccw/devices/$ccw/online
+}
+
+lun_remove()
+{
+    local syspath=$1
+    local lun=$2
+
+    echo "$lun" > $syspath/unit_remove
+}
+
+sg_remove()
+{
+    local sg=$1
+    local sgnum
+
+    sgnum=${sg#/dev/sg}
+    : deactivate /sys/class/scsi_generic/sg$sgnum/device/delete
+    echo 1 > /sys/class/scsi_generic/sg$sgnum/device/delete
+    udevadm settle
+}
+
 while [ $# -gt 0 ]
 do
 	case "$1" in
@@ -92,7 +118,7 @@ do
 			then
 				COMMAND=$1
 			else
-				echo_err "You have alread specified the $COMMAND command, and cannot use the $1 command also."
+				echo_err "You have already specified the $COMMAND command, and cannot use the $1 command also."
 				exit 3
 			fi
 			;;
@@ -142,6 +168,8 @@ if [ ! -d "$FCP_SYS_DIR" ] ; then
     modprobe zfcp
 fi
 
+[ "$COMMAND" == "$LIST_LUN" -a -z "$WWPN" ] && usage && exit 2
+
 read online < /sys/bus/ccw/devices/$BUSID/online
 
 if [ "$online" != 1 ] ; then
@@ -153,10 +181,9 @@ if [ "$online" != 1 ] ; then
 	echo_err "Cannot activate zfcp adapter at $BUSID"
 	exit 2
     fi
-    online=2
+    trapcmd="deactivate $BUSID"
+    trap "$trapcmd" EXIT
 fi
-
-[ "$COMMAND" == "$LIST_LUN" -a -z "$WWPN" ] && usage && exit 2
 
 for loop in 1 2 3 4 5 ; do
 	read status < /sys/bus/ccw/devices/$BUSID/status
@@ -165,7 +192,6 @@ done
 read wwpn_status < /sys/bus/ccw/devices/$BUSID/status
 if !(( $wwpn_status & 0x10000000 )) ; then
 	echo_err "Adapter activation failed, status $wwpn_status"
-	[ "$online" = 2 ] && echo 0 > /sys/bus/ccw/devices/$BUSID/online
 	exit 3
 fi
 
@@ -176,7 +202,6 @@ for host in /sys/bus/ccw/devices/$BUSID/host* ; do
 done
 if [ -z "$hba_num" ] ; then
     echo_err "No SCSI host allocated"
-    [ "$online" = 2 ] && echo 0 > /sys/bus/ccw/devices/$BUSID/online
     exit 3
 fi
 
@@ -186,8 +211,6 @@ then
 	do
 		test -d $PRINT_WWPN && echo ${PRINT_WWPN##*/}
 	done
-	[ "$online" = 2 ] && echo 0 > /sys/bus/ccw/devices/$BUSID/online
-
 	exit 0
 elif [ "$COMMAND" != "$LIST_LUN" ]
 then
@@ -207,13 +230,15 @@ if [ -z "$skip_activation" ] ; then
 	if [ ! -d "${WWPN_DIR}" ]
 	then
 		echo_err "port $WWPN not found on zfcp $BUSID"
-		[ "$online" = 2 ] && echo 0 > /sys/bus/ccw/devices/$BUSID/online
 		exit 9
 	fi
 
 	# Activate WLUN
 	if [ ! -d $WWPN_DIR/0xc101000000000000 ] ; then
 	    echo 0xc101000000000000 > $WWPN_DIR/unit_add
+	    orig_trapcmd="$trapcmd"
+	    trapcmd="lun_remove $WWPN_DIR 0xc101000000000000; $trapcmd"
+	    trap "$trapcmd" EXIT
 	    activated=1
 
 	    # Wait for udev to catch up
@@ -225,20 +250,26 @@ if [ -z "$skip_activation" ] ; then
 	if [ -c "$sgdev" ] ; then
 	    if sg_luns $sgdev > /dev/null 2>&1 ; then
 		LUN_LIST=`sg_luns $sgdev | sed -n 's/^    \(.*\)/\1/p'`
+		trapcmd="sg_remove $sgdev; $trapcmd"
+		trap "$trapcmd" EXIT
 		wlun=1
 	    else
 		wlun=
 	    fi
 	fi
-	if [ -n "$activated" -a -z "$wlun" ] ; then
-	    echo 0xc101000000000000 > $WWPN_DIR/unit_remove
-	    activated=
-	    sgdev=
-	fi
 	if [ -z "$wlun" ] ; then
+	    if [ -n "$activated" ] ; then
+		trapcmd=$orig_trapcmd
+		trap "$trapcmd" EXIT
+		lun_remove $WWPN_DIR 0xc101000000000000
+		activated=
+	    fi
 	    # Activate LUN 0
 	    if [ ! -d $WWPN_DIR/0x0000000000000000 ] ; then
 		echo 0 > $WWPN_DIR/unit_add
+		orig_trapcmd=$trapcmd
+		trapcmd="lun_remove $WWPN_DIR 0x0000000000000000; $trapcmd"
+		trap "$trapcmd" EXIT
 		activated=1
 		# Wait for udev to catch up
 		udevadm settle
@@ -251,9 +282,14 @@ if [ -z "$skip_activation" ] ; then
 		if sg_luns $sgdev > /dev/null 2>&1 ; then
 		    LUN_LIST=`sg_luns $sgdev | sed -n 's/^    \(.*\)/\1/p'`
 		fi
+		if [ -n "$activated" ] ; then
+		    trapcmd="sg_remove $sgdev; $trapcmd"
+		    trap "$trapcmd" EXIT
+		fi
 	    else
 		echo_err "Unable to activate LUN 0"
-		echo 0x0000000000000000 > $WWPN_DIR/unit_remove
+		trap "$trapcmd" EXIT
+		lun_remove $WWPN_DIR 0x0000000000000000
 		activated=
 		sgdev=
 		ERR=10
@@ -263,23 +299,6 @@ if [ -z "$skip_activation" ] ; then
 	for LUN in $LUN_LIST ; do
 	    echo 0x$LUN
 	done
-	if [ "$activated" = 1 ] ; then
-	    if [ -n "$sgdev" ] ; then
-		sgnum=${sgdev#/dev/sg}
-		: deactivate /sys/class/scsi_generic/sg$sgnum/device/delete
-		echo 1 > /sys/class/scsi_generic/sg$sgnum/device/delete
-		udevadm settle
-	    fi
-	    if [ "$wlun" = 1 ] ; then
-		echo 0xc101000000000000 > $WWPN_DIR/unit_remove
-		wlun=
-	    else
-		echo 0x0000000000000000 > $WWPN_DIR/unit_remove
-	    fi
-	    activated=
-	fi
-	[ "$online" = 2 ] && echo 0 > /sys/bus/ccw/devices/$BUSID/online
-
 	exit $ERR
 else
 	for loop in 1 2 3 4 5 ; do
