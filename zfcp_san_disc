@@ -64,6 +64,27 @@ list_lun()
 
 }
 
+cleanup()
+{
+	trap '' SIGINT SIGQUIT SIGPIPE
+	if [ "$activated" = 1 ] ; then
+	    if [ -n "$sgdev" ] ; then
+		sgnum=${sgdev#/dev/sg}
+		: deactivate /sys/class/scsi_generic/sg$sgnum/device/delete
+		echo 1 > /sys/class/scsi_generic/sg$sgnum/device/delete
+		udevadm settle
+	    fi
+	    if [ "$wlun" = 1 ] ; then
+		echo 0xc101000000000000 > $WWPN_DIR/unit_remove
+		wlun=
+	    else
+		echo 0x0000000000000000 > $WWPN_DIR/unit_remove
+	    fi
+	    activated=
+	fi
+	[ "$online" = 2 ] && echo 0 > /sys/bus/ccw/devices/$BUSID/online
+}
+
 while [ $# -gt 0 ]
 do
 	case "$1" in
@@ -215,6 +236,7 @@ if [ -z "$skip_activation" ] ; then
 	if [ ! -d $WWPN_DIR/0xc101000000000000 ] ; then
 	    echo 0xc101000000000000 > $WWPN_DIR/unit_add
 	    activated=1
+	    trap 'echo Interrupt received! Terminating...; cleanup; exit' >&2 SIGINT SIGQUIT SIGPIPE
 
 	    # Wait for udev to catch up
 	    udevadm settle
@@ -263,22 +285,8 @@ if [ -z "$skip_activation" ] ; then
 	for LUN in $LUN_LIST ; do
 	    echo 0x$LUN
 	done
-	if [ "$activated" = 1 ] ; then
-	    if [ -n "$sgdev" ] ; then
-		sgnum=${sgdev#/dev/sg}
-		: deactivate /sys/class/scsi_generic/sg$sgnum/device/delete
-		echo 1 > /sys/class/scsi_generic/sg$sgnum/device/delete
-		udevadm settle
-	    fi
-	    if [ "$wlun" = 1 ] ; then
-		echo 0xc101000000000000 > $WWPN_DIR/unit_remove
-		wlun=
-	    else
-		echo 0x0000000000000000 > $WWPN_DIR/unit_remove
-	    fi
-	    activated=
-	fi
-	[ "$online" = 2 ] && echo 0 > /sys/bus/ccw/devices/$BUSID/online
+
+	cleanup
 
 	exit $ERR
 else
