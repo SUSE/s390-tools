@@ -57,7 +57,7 @@ case "${machine}" in
   2827) echo "${machine} = z12-EC  IBM zEnterprise EC12" ;;
   2828) echo "${machine} = z12-BC  IBM zEnterprise BC12" ;;
   2964) echo "${machine} = z13     IBM z13" ;;
-  2965) echo "${machine} = z13s    IBM z13s" ;;
+  2965) echo "${machine} = z13s    IBM z13s (single frame)" ;;
   3906) echo "${machine} = z14     IBM z14" ;;
   *) echo "An unknown machine type was reported: ${machine}" >&2
      echo "Please file a bug report with this output:" >&2
