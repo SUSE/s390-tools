@@ -18,7 +18,7 @@ of the Cobbler or TFTP server.
 Copyright 2006-2009, Red Hat, Inc
 Brad Hinson <bhinson@redhat.com>
 
-Copyright 2012, SUSE Linux,
+Copyright 2012, 2017, SUSE Linux,
 Mark Post <mpost@suse.com>
 
 This program is free software; you can redistribute it and/or modify
@@ -41,45 +41,69 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 /* Set the default environment for "safety" reasons. */
 ADDRESS COMMAND
 
-/* Make it possible to interrupt zPXE and to enter CMS no matter how
-   the guest was started, if there is a system-specific profile
-   or not, etc.
-*/
-say
-say 'Enter a non-blank character and ENTER (or two ENTERs) within 10',
-    'seconds to interrupt zPXE.'
-ADDRESS CMS 'WAKEUP +00:10 (CONS'
-/* Check for the interrupt code */
-if rc = 6 then do
-  say 'Interrupt received: exiting to CMS...'
-  pull                                             /* Clear the stack */
-  exit
-end
+/* Save the value of the trace state */
+tvar_o=trace()
+tvar_c=tvar_o
 
 /* Was this script invoked with "debug" as one of the parameters? */
-nodebug=1
-if arg() then do
-  parse upper arg uparg
-  if index(uparg,'DEBUG') <> 0 then do
-    trace i
-    nodebug=0
+debug=0
+if arg() then
+  do
+    parse upper arg uparg
+    do sub=1 to words(uparg)
+      if word(uparg,sub) = "DEBUG" then
+        do
+          debug=1;
+          trace i;
+          tvar_c=trace()
+        end;
+      else do  /* This is a do/end in case we want to add to it later */
+             trace e
+             tvar_c=trace()
+           end
+     end
   end
-  else do      /* This is a do/end in case we want to add to it later */
-    trace e
-  end
-end
 
 /* Set some defaults */
+/* These values are intended to be modified by the site using this */
+/* script to match their environment. */
 userid=''
 server=''
 iplDisk=''
 server_def = 'internal.tftp.server'     /* define default TFTP server */
 iplDisk_def = '150'                        /* define default IPL DASD */
-profilelist = 'PROFILE LIST T'    /* VDISK will be defined as T later */
-profiledetail = 'PROFILE DETAIL T'
-zpxeparm = 'ZPXE PARM T'
-zpxeconf = 'ZPXE CONF T'
+FM='T'                                      /* Default file mode is T */
+profilelist = 'PROFILE LIST' FM  /* Disk will be accessed as FM later */
+profiledetail = 'PROFILE DETAIL' FM
+zpxeparm = 'ZPXE PARM' FM
+zpxeconf = 'ZPXE CONF' FM
 config = 'ZPXE CONF A'
+seconds=10    /* The default amount of time to wait for console input */
+
+workDiskType='VFB-512'
+workDiskSize=200000           /* This is approximately 97MB of space. */
+/* For TDISK instead of VDISK, comment out the previous two lines and */
+/* uncomment the following two lines.*/
+/* workDisk='T3390' */
+/* workDiskSize=138 */
+
+/* Make it possible to interrupt zPXE and to enter CMS no matter how
+   the guest was started, if there is a system-specific profile
+   or not, etc.
+*/
+if debug then say 'Debugging, so we will skip the wait and just run.'
+else do
+        say
+        say 'Enter a non-blank character and ENTER (or two ENTERs)',
+            'within' seconds 'seconds to interrupt zPXE.'
+        ADDRESS CMS 'WAKEUP +00:'seconds '(CONS'
+/* Check for the interrupt code */
+        if rc = 6 then do
+          say 'Interrupt received: exiting to CMS...'
+          ADDRESS CMS 'DESBUF'                     /* Clear the stack */
+          exit
+        end
+     end
 
 /* For translating strings to lowercase */
 lower = xrange('a','i')xrange('j','r')xrange('s','z')
@@ -107,34 +131,33 @@ userid_def = translate(userid_def, lower, upper)
 'CP TERM HOLD OFF'
 
 /* We want to have a way to figure out what went wrong if something
-   isn't working.
-*/
+   isn't working. */
+
 'CP SPOOL CONSOLE STOP CLOSE'  /* Close any existing spooled console. */
 'CP SPOOL CONSOLE START'  /* Start spooling the console for this run. */
 
-if nodebug then ADDRESS CMS 'VMFCLEAR'                /* clear screen */
+if \ debug then ADDRESS CMS 'VMFCLEAR'                /* clear screen */
 
-/* The following two commands that were in the original script are */
-/* almost certainly not going to work for anyone that only has CP */
+/* The following two commands that were in the original script are    */
+/* almost certainly not going to work for anyone that only has CP     */
 /* privilege class G */
 /* 'set vdisk syslim infinite' */
 /* 'set vdisk userlim infinite' */
 
-/* Define a temporary disk (VDISK) to store files and CMS FORMAT it   */
+/* Define a temporary disk to store files and CMS FORMAT it           */
 /* If your site doesn't allow this, but does allow TDISKs, change the */
 /* DEFINE command to T3390 instead */
 'CP SET EMSG OFF'
-if nodebug then trace off
+if \ debug then trace off
 'CP DETACH FFFF'                            /* detach ffff if present */
-if nodebug then trace e
-else trace i
+trace value tvar_c
 'CP SET EMSG ON'
-'CP DEFINE VFB-512 AS FFFF BLK 144000'  /* 512 byte block size ~70 MB */
+'CP DEFINE' workDiskType' AS FFFF' workDiskSize
 queue '1'
 queue 'tmpdsk'
-if nodebug then                   /* If debug was not specified, then */
+if \ debug then                   /* If debug was not specified, then */
   ADDRESS CMS 'set cmstype ht'              /* suppress format output */
-ADDRESS CMS 'format ffff t'            /* format VDISK as file mode t */
+ADDRESS CMS 'format ffff' FM          /* format VDISK as file mode FM */
 ADDRESS CMS 'set cmstype rt'          /* Resume seeing command output */
 say 'DASD FFFF has been CMS formatted'
 
@@ -165,18 +188,20 @@ say
 say 'Connecting to server 'server                /* print server name */
 
 /* Check whether a user-specific PXE profile exists. */
-call GetTFTP '/s390x/s_'userid 'profile.detail.t'
+call GetTFTP '/s390x/s_'userid 'profile.detail.'FM
 if lines(profiledetail) > 0 then call ProcessUserProfile
 else do                         /* no user-specific profile was found */
   say 'No profile found for' userid
   if disconnected then do                     /* user is disconnected */
-    ADDRESS CMS 'release t (detach'
+    ADDRESS CMS 'release' FM '(detach'
     ADDRESS CMS 'exec vmlink tcpmaint 592 <detach>'
     say 'User is disconnected.  Booting from DASD 'iplDisk'...'
     'CP IPL' iplDisk
   end
   else call ProcessGenericProfiles   /* user is interactive -> prompt */
 end  /* no user-specific profile was found */
+
+trace value tvar_o
 
 exit
 /*                                         */
@@ -227,7 +252,7 @@ say
 bootRc = ParseSystemRecord()            /* parse file for boot action */
 if bootRc = 0 then do
   say 'The profile said we should boot from local disk.'
-  ADDRESS CMS 'release t (detach'
+  ADDRESS CMS 'release' FM '(detach'
   ADDRESS CMS 'exec vmlink tcpmaint 592 <detach>'
   say 'IPLing from' iplDisk
   'CP IPL' iplDisk                          /* boot from default DASD */
@@ -237,13 +262,13 @@ else do         /* The profile should contain pointers to kernel, etc.*/
 
   /* Get the user PARM file that contains network info */
   say 'Downloading parameter file [/s390x/s_'userid'_parm]...'
-  call GetTFTP '/s390x/s_'userid'_parm' 'zpxe.parm.t'
+  call GetTFTP '/s390x/s_'userid'_parm' 'zpxe.parm.'FM
   if CheckDownload('s_'userid'_parm' zpxeparm)  <> 0 then
     abort=1
 
   /* Get the user CONF file that currently isn't used for anything */
   say 'Downloading conf file [/s390x/s_'userid'_conf]...'
-  call GetTFTP '/s390x/s_'userid'_conf' 'zpxe.conf.t'
+  call GetTFTP '/s390x/s_'userid'_conf' 'zpxe.conf.'FM
   if CheckDownload('s_'userid'_conf' zpxeconf) <> 0 then
     abort=1
 
@@ -265,7 +290,7 @@ end /* he profile should contain pointers to kernel, etc */
 ProcessGenericProfiles:
 /* Download the list of generic profiles available */
 say 'Downloading the profile list [/s390x/profile_list]...'
-call GetTFTP '/s390x/profile_list' 'profile.list.t'
+call GetTFTP '/s390x/profile_list' 'profile.list.'FM
 if CheckDownload('profile_list' profilelist) <> 0 then do
   say '**                                      **'
   say '** No profile list found                **'
@@ -302,7 +327,7 @@ select
   end
 
   when answer = '' then do                   /* IPL from default disk */
-    ADDRESS CMS 'release t (detach'
+    ADDRESS CMS 'release' FM '(detach'
     ADDRESS CMS 'exec vmlink tcpmaint 592 <detach>'
     say 'Booting from DASD 'iplDisk'...'
     'CP IPL' iplDisk
@@ -312,19 +337,19 @@ select
     abort=0
 
     say 'Downloading generic profile [/s390x/p_'profile.answer']...'
-    call GetTFTP '/s390x/p_'profile.answer 'profile.detail.t'
+    call GetTFTP '/s390x/p_'profile.answer 'profile.detail.'FM
     if CheckDownload('p_'profile.answer profiledetail) <> 0 then
       abort=1
 
     say 'Downloading generic parameter file',
         '[/s390x/p_'profile.answer'_parm]...'
-    call GetTFTP '/s390x/p_'profile.answer'_parm' 'zpxe.parm.t'
+    call GetTFTP '/s390x/p_'profile.answer'_parm' 'zpxe.parm.'FM
     if CheckDownload('p_'profile.answer'_parm' zpxeparm) <> 0 then
       abort=1
 
     say 'Downloading generic conf file',
         '[/s390x/p_'profile.answer'_conf]...'
-    call GetTFTP '/s390x/p_'profile.answer'_conf' 'zpxe.conf.t'
+    call GetTFTP '/s390x/p_'profile.answer'_conf' 'zpxe.conf.'FM
     if CheckDownload('p_'profile.answer'_conf' zpxeconf) <> 0 then
       abort=1
 
@@ -346,7 +371,7 @@ select
     call lineout zpxeparm, hostipparm
     call lineout zpxeparm                    /* close the output file */
 
-    if nodebug then ADDRESS CMS 'VMFCLEAR'            /* clear screen */
+    if \ debug then ADDRESS CMS 'VMFCLEAR'            /* clear screen */
     say
     say 'Using profile 'answer' ['profile.answer']'
     say
@@ -379,11 +404,13 @@ GetTFTP:
 
   if transfermode <> '' then
     queue 'mode' transfermode
+
   queue 'get 'path filename
   queue 'quit'
 
-  if nodebug then
+  if \ debug then
     ADDRESS CMS 'set cmstype ht'              /* suppress TFTP output */
+
   ADDRESS CMS 'tftp' server
   ADDRESS CMS 'set cmstype rt'
 
@@ -422,8 +449,8 @@ DownloadBinaries:
     exit 99
   end
   say 'Downloading kernel ['kernelpath']...'
-  call GetTFTP kernelpath 'kernel.img.t' octet
-  if CheckDownload(kernelpath kernel img t) <> 0 then do
+  call GetTFTP kernelpath 'kernel.img.'FM octet
+  if CheckDownload(kernelpath kernel img FM) <> 0 then do
     say 'Aborting PXE boot.'
     exit 99
   end
@@ -435,8 +462,8 @@ DownloadBinaries:
     exit 99
   end
   say 'Downloading initrd ['initrdpath']...'
-  call GetTFTP initrdpath 'initrd.img.t' octet
-  if CheckDownload(initrdpath initrd img t) <> 0 then do
+  call GetTFTP initrdpath 'initrd.img.'FM octet
+  if CheckDownload(initrdpath initrd img FM) <> 0 then do
     say 'Aborting PXE boot.'
     exit 99
   end
@@ -450,8 +477,8 @@ DownloadBinaries:
 
   /* Convert to fixed record length since they're going to be run
      through the virtual card reader. */
-  ADDRESS CMS 'pipe < KERNEL IMG T | fblock 80 00 | > KERNEL IMG T'
-  ADDRESS CMS 'pipe < INITRD IMG T | fblock 80 00 | > INITRD IMG T'
+  ADDRESS CMS 'pipe < KERNEL IMG 'FM' | fblock 80 00 | > KERNEL IMG' FM
+  ADDRESS CMS 'pipe < INITRD IMG 'FM' | fblock 80 00 | > INITRD IMG' FM
   ADDRESS CMS 'pipe < ' zpxeparm ' | fblock 80 SPACE | > ' zpxeparm
 
 return /* DownloadBinaries */
@@ -467,10 +494,10 @@ PunchFiles:
   'CP CLOSE READER'
   'CP PURGE READER ALL'                      /* clear reader contents */
 
-  ADDRESS CMS 'punch kernel img t ( noheader'         /* punch kernel */
-  ADDRESS CMS 'punch zpxe parm t ( noheader'       /* punch PARM file */
-  ADDRESS CMS 'punch initrd img t ( noheader'         /* punch initrd */
-  ADDRESS CMS 'release t (detach'     /* release and detach the VDISK */
+  ADDRESS CMS 'punch kernel img' FM '( noheader'         /* punch kernel */
+  ADDRESS CMS 'punch zpxe parm' FM '( noheader'       /* punch PARM file */
+  ADDRESS CMS 'punch initrd img' FM '( noheader'         /* punch initrd */
+  ADDRESS CMS 'release' FM '(detach'     /* release and detach the VDISK */
   ADDRESS CMS 'exec vmlink tcpmaint 592 <detach>'    /* and this disk */
 
   'CP CHANGE READER ALL KEEP NOHOLD'          /* keep files in reader */
