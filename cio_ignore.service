@@ -1,8 +1,7 @@
 [Unit]
 Description=Setup devices for cio_ignore
 DefaultDependencies=no
-Wants=local-fs.target
-After=local-fs.target
+Before=local-fs.target
 ConditionKernelCommandLine=cio_ignore
 
 [Service]
